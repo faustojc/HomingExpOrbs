@@ -1,5 +1,6 @@
 package blackoutroulette.homingexporbs.entitys;
 
+import io.netty.buffer.ByteBuf;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Random;
@@ -20,8 +21,9 @@ import net.minecraft.util.DamageSource;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.World;
+import net.minecraftforge.fml.common.registry.IEntityAdditionalSpawnData;
 
-public class EntityHomingExpOrb extends EntityXPOrb {
+public class EntityHomingExpOrb extends EntityXPOrb implements IEntityAdditionalSpawnData {
 
 	// server-only values
 	protected static final HashMap<String, MutablePair<Long, Integer>> PLAYER_DELAY_MAP = new HashMap<String, MutablePair<Long, Integer>>();
@@ -32,6 +34,7 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 	protected EntityPlayer closestPlayer;
 	protected Vector3d target;
 	protected Vector3d velocity = new Vector3d();
+	protected final Vector3d targetScratch = new Vector3d();
 	protected boolean targetIsPlayer = false;
 	protected Delay delay = new Delay();
 	public int updateStep = 0;
@@ -60,8 +63,10 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 
 	@Override
 	public void onUpdate() {
-		if (world.isRemote && isActive()) {
-			++super.xpColor;
+		if (world.isRemote) {
+			if (isActive()) {
+				++super.xpColor;
+			}
 			return;
 		}
 
@@ -84,6 +89,15 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 			return false;
 		}
 
+		if (closestPlayer != null && (!closestPlayer.isEntityAlive() || closestPlayer.isSpectator()
+				|| closestPlayer.world != world)) {
+			// drop stale target; re-acquire like a fresh orb
+			closestPlayer = null;
+			targetIsPlayer = false;
+			velocity.set(0.0D, 0.0D, 0.0D);
+			setActive(false);
+		}
+
 		delay.decrease();
 		if (closestPlayer == null && !delay.hasDelay()) {
 			if (playerInRange()) {
@@ -100,22 +114,26 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 	}
 
 	protected void calculateTrajectory() {
-		final Vector3d pos = new Vector3d(posX, posY, posZ);
 		final Vector3d v = getTarget();
-		v.sub(pos);
+		v.x -= posX;
+		v.y -= posY;
+		v.z -= posZ;
 
-		if (!targetIsPlayer && v.length() <= 0.5D) {
+		final double lenSq = v.lengthSquared();
+		if (!targetIsPlayer && lenSq <= 0.25D) {
 			targetIsPlayer = true;
 		}
 
-		v.normalize();
-		v.scale(Constants.MAX_VELOCITY);
+		if (lenSq >= 1e-8D) {
+			v.normalize();
+			v.scale(Constants.MAX_VELOCITY);
+		}
 
 		// steering
 		v.sub(velocity);
 		v.scale(1.0F / Constants.MASS);
 		velocity.add(v);
-		if(velocity.length() > Constants.MAX_VELOCITY) {
+		if(velocity.lengthSquared() > Constants.MAX_VELOCITY * Constants.MAX_VELOCITY) {
 			velocity.normalize();
 			velocity.scale(Constants.MAX_VELOCITY);
 		}
@@ -124,9 +142,11 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 	
 	protected Vector3d getTarget() {
 		if(targetIsPlayer) {
-			return new Vector3d(closestPlayer.posX,	closestPlayer.posY + this.closestPlayer.getEyeHeight() / 2.0D, closestPlayer.posZ);
+			targetScratch.set(closestPlayer.posX, closestPlayer.posY + this.closestPlayer.getEyeHeight() / 2.0D, closestPlayer.posZ);
+		} else {
+			targetScratch.set(target);
 		}
-		return new Vector3d(target);
+		return targetScratch;
 	}
 
 	@Override
@@ -154,6 +174,9 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 
 	protected void updatePitchAndYaw() {
 		final Vector3d direction = new Vector3d(posX - prevPosX, posY - prevPosY, posZ - prevPosZ);
+		if (direction.lengthSquared() < 1e-8D) {
+			return;
+		}
 		direction.normalize();
 
 		this.prevRotationPitch = this.rotationPitch;
@@ -170,6 +193,16 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 	}
 
 	@Override
+	public void writeSpawnData(ByteBuf buffer) {
+		buffer.writeInt(xpValue);
+	}
+
+	@Override
+	public void readSpawnData(ByteBuf additionalData) {
+		xpValue = additionalData.readInt();
+	}
+
+	@Override
 	public void readEntityFromNBT(@Nonnull NBTTagCompound cmp) {
 		super.readEntityFromNBT(cmp);
 		targetIsPlayer = true;
@@ -180,7 +213,7 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 		if (closestPlayer == null || closestPlayer.isSpectator()
 				|| closestPlayer.getDistance(this) > Constants.HOMING_RANGE) {
 			closestPlayer = world.getClosestPlayerToEntity(this, Constants.HOMING_RANGE);
-			if (closestPlayer == null || closestPlayer.isSpectator()) {
+			if (closestPlayer == null || closestPlayer.isSpectator() || !closestPlayer.isEntityAlive()) {
 				closestPlayer = null;
 				return false;
 			}
@@ -243,7 +276,8 @@ public class EntityHomingExpOrb extends EntityXPOrb {
 
 		final int i = Constants.MAX_SPAWN_DELAY / 2;
 		final int rand = EntityHomingExpOrb.RNG.nextInt(Constants.MAX_SPAWN_DELAY - i) + i;
-		pair.setRight(Math.max(0, pair.getRight() + rand - (int) (worldTime - pair.getLeft())));
+		pair.setRight(Math.min(Constants.MAX_QUEUED_SPAWN_DELAY,
+				Math.max(0, pair.getRight() + rand - (int) (worldTime - pair.getLeft()))));
 		pair.setLeft(worldTime);
 
 		delay.add(pair.getRight());

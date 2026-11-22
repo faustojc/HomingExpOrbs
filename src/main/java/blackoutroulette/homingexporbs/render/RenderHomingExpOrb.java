@@ -34,6 +34,10 @@ public class RenderHomingExpOrb extends RenderXPOrb {
 		if(ps > 1){
 			return; // minimal particles case
 		}
+		if (x * x + y * y + z * z > 1024.0D) {
+			e.lastParticlePos = null; // restart trail when back in range
+			return;
+		}
 		final int particleDistance = Constants.PARTICLE_DISTANCE[ps];
 
 		Vector3d lastPos;

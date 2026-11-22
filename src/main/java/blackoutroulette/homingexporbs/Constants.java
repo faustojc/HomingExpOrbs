@@ -10,6 +10,7 @@ public final class Constants {
 	public static final double MASS = 8.0D;
 	public static final float SIZE = 0.25F;
 	public static final int MAX_SPAWN_DELAY = 6;
+	public static final int MAX_QUEUED_SPAWN_DELAY = 20;
 	public static final int MAX_LIFETIME = 6000;
 	public static final int HOMING_RANGE = 64;
 	public static final int MIN_ANGLE = 45;
